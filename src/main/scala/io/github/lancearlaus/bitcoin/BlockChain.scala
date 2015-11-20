@@ -2,102 +2,63 @@ package io.github.lancearlaus.bitcoin
 
 import io.github.yzernik.bitcoinscodec.messages.Block
 import scodec.Attempt.{Failure, Successful}
-import scodec.{Decoder, Codec}
 import scodec.bits.{BitVector, ByteOrdering}
 import scodec.codecs._
-import scala.annotation.tailrec
+import scodec.{Codec, Err}
+
 import scala.collection.mutable
 
 case class Blockchain(magic: Long, version: Int) {
 
   val blockCodec = Block.codec(version)
 
+  val codec: Codec[Block] = (
+    constant(BitVector.fromLong(magic, 32, ByteOrdering.LittleEndian)) ~>
+      variableSizeBytesLong(uint32L, blockCodec)
+    )
+
+
   case class BlockHeader(length: Long)
 
   object BlockHeader {
     val length = 8   // bytes
-    val codec = (
-      constant(BitVector.fromLong(magic, 32, ByteOrdering.LittleEndian)) :~>:
-      ("length" | uint32L)
+
+    // Codec that only extracts the header (skips the payload)
+    val codec: Codec[BlockHeader] = (
+      constant(BitVector.fromLong(magic, 32, ByteOrdering.LittleEndian)) ~>
+        ("length" | uint32L.flatPrepend(length => ignore(length * 8).hlist.dropUnits))
     ).as[BlockHeader]
   }
 
-  object BlockHeaders {
-
-    // Decodes headers without decoding blocks
-    val decoder = Decoder[BlockHeader] { data: BitVector =>
-      for {
-        header <- BlockHeader.codec.decode(data)
-        skip <- bits(header.value.length * 8).decode(header.remainder)
-      } yield header.mapRemainder(r => skip.remainder)
-    }
-
-  }
-
-  case class BlockEntry(offset: Long, length: Long) {
+  case class BlockChunk(offset: Long, length: Long) {
     def end = offset + length
+    def decode(bits: BitVector) = blockCodec.decode(bits.drop(offset).take(length))
   }
-  object BlockEntry {
-    def apply(offset: Long, header: BlockHeader): BlockEntry = BlockEntry(offset + BlockHeader.length, header.length)
-  }
-
-
-  val codec: Codec[Block] = {
-    def encode(block: Block) = for {
-      payload <- blockCodec.encode(block)
-      header <- BlockHeader.codec.encode(BlockHeader(payload.length / 8))
-    } yield header ++ payload
-
-    def decode(bits: BitVector) = for {
-      header <- BlockHeader.codec.decode(bits)
-      // Split to ensure block decode doesn't consume more bits than stated
-      (payload, remainder) = header.remainder.splitAt(header.value.length * 8)
-      block <- blockCodec.decode(payload)
-    } yield block.mapRemainder(_ => remainder)
-
-    Codec[Block](encode _, decode _)
+  object BlockChunk {
+    def apply(offset: Long, header: BlockHeader): BlockChunk = BlockChunk(offset + BlockHeader.length, header.length)
   }
 
-  // Extract all block locations (without parsing the blocks
-  def entries(bits: BitVector): Either[String, List[BlockEntry]] = {
-
-    // TODO: Figure out why this recursive function leads to OutOfMemoryError
-    @tailrec
-    def decode(bits: BitVector, offset: Long, entries: mutable.MutableList[BlockEntry] = mutable.MutableList.empty): Either[String, List[BlockEntry]] = {
-      if (bits.nonEmpty) {
-        (for {
-          header <- BlockHeaders.decoder.decode(bits)
-//          entry =
-        } yield (BlockEntry(offset, header.value), header.remainder)) match {
-          case Successful((entry, tail)) => decode(tail, entry.end, entries += entry)
-          case Failure(cause) => Left(cause.messageWithContext)
-        }
-      } else {
-        Right(entries.toList)
-      }
-    }
-    //    decode(bits, 0)
-
+  def chunks(bits: BitVector): Either[Err, List[BlockChunk]] = {
     var offset = 0L
     var tail = bits
-    val entries = mutable.MutableList.empty[BlockEntry]
+    val chunks = mutable.MutableList.empty[BlockChunk]
 
     while (tail.nonEmpty) {
-      BlockHeaders.decoder.decode(tail) match {
+      BlockHeader.codec.decode(tail) match {
         case Successful(result) => {
-          val entry = BlockEntry(offset, result.value)
-          entries += entry
+          val chunk = BlockChunk(offset, result.value)
+          chunks += chunk
           tail = result.remainder
-          offset = entry.end
+          offset = chunk.end
         }
         case Failure(cause) => {
           println(s"ERROR: ${cause.messageWithContext}")
-          tail = BitVector.empty
+          return Left(cause)
         }
       }
     }
 
-    Right(entries.toList)
+    Right(chunks.toList)
   }
 
 }

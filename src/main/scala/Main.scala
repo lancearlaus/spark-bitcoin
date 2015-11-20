@@ -11,10 +11,10 @@ object Main {
 
     val magic = 0xD9B4BEF9L
     val version = 1
-    val file = "data/bootstrap.dat"
-    //val file = "data/blk00000.dat"
+    //val file = "data/bootstrap.dat"
+    val file = "data/blk00000.dat"
 
-    val codec = Blockchain(magic, 1).BlockHeaders.decoder
+    val codec = Blockchain(magic, 1).BlockHeader.codec.asDecoder
 //    val codec = Blockchain.codec(magic, version)
     val stream = new FileInputStream(file)
     val bits = BitVector.fromInputStream(stream)
@@ -50,9 +50,14 @@ object Main {
     println(s"Calculating index...")
 
     val stream2 = new FileInputStream(file)
-    Blockchain(magic, version).entries(BitVector.fromInputStream(stream2)) match {
+    val bits2 = BitVector.fromInputStream(stream2)
+    val chunks = Blockchain(magic, version).chunks(bits2)
+    chunks match {
       case Left(error) => println(s"ERROR: $error")
-      case Right(entries) => println(s"Entries size: ${entries.size}")
+      case Right(chunks) => {
+        println(s"Chunks size: ${chunks.size}")
+        //chunks.foreach(chunk => )
+      }
     }
   }
 
