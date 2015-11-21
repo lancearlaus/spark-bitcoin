@@ -1,64 +1,54 @@
-import java.io.FileInputStream
+import java.nio.channels.FileChannel
+import java.nio.file.{Paths, StandardOpenOption}
 
-import io.github.lancearlaus.bitcoin.Blockchain
-import scodec.Attempt.{Failure, Successful}
+import io.github.lancearlaus.bitcoin.BlockChain
 import scodec.bits.BitVector
+
+import scala.collection.mutable
 
 
 object Main {
 
-  def main(args: Array[String]) {
+  val magic = 0xD9B4BEF9L
+  val version = 1
+  val blockChain = BlockChain(magic, version)
 
-    val magic = 0xD9B4BEF9L
-    val version = 1
-    val file = "data/bootstrap.dat"
-    //val file = "data/blk00000.dat"
-
-    val codec = Blockchain(magic, 1).BlockHeader.codec.asDecoder
-//    val codec = Blockchain.codec(magic, version)
-    val stream = new FileInputStream(file)
-    val bits = BitVector.fromInputStream(stream)
-
-    println(s"Loading file $file...")
-
-    var (blockCount, txCount) = (0L, 0L)
-    var remainder = bits
-
-//    try {
-//      while (remainder.nonEmpty) {
-//        codec.decode(remainder) match {
-//          case Successful(result) => {
-//            remainder = result.remainder
-//            blockCount = blockCount + 1
-//            //txCount = txCount + result.value.block.txs.size
-//            //          println(s"count: $count, frame: ${result.value}")
-//            print(".")
-//            if (blockCount % 100 == 0) println(s" -> blocks: $blockCount, txs: $txCount")
-//          }
-//          case Failure(cause) => {
-//            println(s"FAILED: $cause")
-//            remainder = BitVector.empty
-//          }
-//        }
-//      }
-//    } finally {
-//      stream.close()
-//    }
-//
-//    println(s"Totals: blocks: $blockCount, txs: $txCount")
-
-    println(s"Calculating index...")
-
-    val stream2 = new FileInputStream(file)
-    val bits2 = BitVector.fromInputStream(stream2)
-    val chunks = Blockchain(magic, version).chunks(bits2)
-    chunks match {
-      case Left(error) => println(s"ERROR: $error")
-      case Right(chunks) => {
-        println(s"Chunks size: ${chunks.size}")
-        //chunks.foreach(chunk => )
-      }
+  def decodeEntries(bits: BitVector): List[BlockChain#BlockEntry] = {
+    val entries = mutable.MutableList.empty[BlockChain#BlockEntry]
+    var count = 0
+    blockChain.entries(bits).foreach { result =>
+      result.fold(
+        err => println(s"ERROR: $err"),
+        { entry =>
+          entries += entry
+          count += 1
+          if (count % 100 == 0) print(".")
+          if (count % 10000 == 0) println()
+        }
+      )
     }
+    println()
+    println(s"Total entries: $count")
+
+    entries.toList
   }
 
+  def main(args: Array[String]) {
+
+    val fileName = "data/bootstrap.dat"
+//    val fileName = "data/blk00000.dat"
+
+    println(s"Opening file $fileName")
+
+    val channel = FileChannel.open(Paths.get(fileName), StandardOpenOption.READ)
+    val bits = BitVector.fromMmap(channel)
+
+    println(f"Decoding file $fileName%s (size: ${bits.size / 8}%,.0f)")
+    val entries = decodeEntries(bits)
+
+    for (i <- 0 to 100) {
+      println(s"${entries(i).block(bits)}")
+    }
+
+  }
 }

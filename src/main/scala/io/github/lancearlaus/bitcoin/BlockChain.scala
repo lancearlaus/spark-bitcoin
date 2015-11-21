@@ -1,22 +1,16 @@
 package io.github.lancearlaus.bitcoin
 
 import io.github.yzernik.bitcoinscodec.messages.Block
-import scodec.Attempt.{Failure, Successful}
 import scodec.bits.{BitVector, ByteOrdering}
 import scodec.codecs._
 import scodec.{Codec, Err}
 
-import scala.annotation.tailrec
-import scala.collection.mutable
+case class BlockChain(magic: Long, version: Int) {
 
-case class Blockchain(magic: Long, version: Int) {
-
+  private val magicCodec = constant(BitVector.fromLong(magic, 32, ByteOrdering.LittleEndian))
   private val blockCodec = Block.codec(version)
 
-  val codec: Codec[Block] = (
-    constant(BitVector.fromLong(magic, 32, ByteOrdering.LittleEndian)) ~>
-      variableSizeBytesLong(uint32L, blockCodec)
-    )
+  val codec: Codec[Block] = magicCodec ~> variableSizeBytesLong(uint32L, blockCodec)
 
 
   case class BlockHeader(length: Long)
@@ -26,59 +20,57 @@ case class Blockchain(magic: Long, version: Int) {
 
     // Codec that only extracts the header (skips the payload)
     val codec: Codec[BlockHeader] = (
-      constant(BitVector.fromLong(magic, 32, ByteOrdering.LittleEndian)) ~>
-        ("length" | uint32L.flatPrepend(length => ignore(length * 8).hlist.dropUnits))
+      magicCodec ~> ("length" | uint32L.flatPrepend(length => ignore(length * 8).hlist.dropUnits))
     ).as[BlockHeader]
   }
 
-  case class BlockChunk(offset: Long, length: Long) {
+  case class BlockEntry(offset: Long, length: Long) {
     def end = offset + length
-    def decode(bits: BitVector) = blockCodec.decode(bits.drop(offset).take(length))
+    /**
+     * Retrieves the block represented by this entry from the chain
+     *
+     * @param chain BitVector of the entire chain (underlying storage must support random access)
+     * @return the decoded block or corresponding decoding error
+     */
+    def block(chain: BitVector): Either[Err, Block] =
+      blockCodec.decode(chain.drop(offset * 8).take(length * 8)).toEither.right.map(_.value)
   }
-  object BlockChunk {
-    def apply(offset: Long, header: BlockHeader): BlockChunk = BlockChunk(offset + BlockHeader.length, header.length)
-  }
-
-  def chunks2(bits: BitVector): Either[Err, List[BlockChunk]] = {
-
-    @tailrec
-    def decode(bits: BitVector, offset: Long = 0, chunks: mutable.MutableList[BlockChunk] = mutable.MutableList.empty): Either[Err, List[BlockChunk]] = {
-      if (bits.nonEmpty) {
-        (for {
-          header <- BlockHeader.codec.decode(bits)
-        } yield (BlockChunk(offset, header.value), header.remainder)) match {
-          case Successful((chunk, tail)) => decode(tail, chunk.end, chunks += chunk)
-          case Failure(err) => return Left(err)
-        }
-      } else {
-        Right(chunks.toList)
-      }
-    }
-
-    decode(bits)
+  object BlockEntry {
+    def apply(offset: Long, header: BlockHeader): BlockEntry = BlockEntry(offset + BlockHeader.length, header.length)
   }
 
-  def chunks(bits: BitVector): Either[Err, List[BlockChunk]] = {
+  def entries(bits: BitVector) = new Iterator[Either[Err, BlockEntry]] {
     var offset = 0L
     var tail = bits
-    val chunks = mutable.MutableList.empty[BlockChunk]
 
-    while (tail.nonEmpty) {
-      BlockHeader.codec.decode(tail) match {
-        case Successful(result) => {
-          val chunk = BlockChunk(offset, result.value)
-          chunks += chunk
-          tail = result.remainder
-          offset = chunk.end
-        }
-        case Failure(cause) => {
-          println(s"ERROR: ${cause.messageWithContext}")
-          return Left(cause)
-        }
+    override def hasNext: Boolean = tail.nonEmpty
+
+    override def next(): Either[Err, BlockEntry] = {
+      BlockHeader.codec.decode(tail).toEither.right.map { result =>
+        val chunk = BlockEntry(offset, result.value)
+        tail = result.remainder
+        offset = chunk.end
+        chunk
       }
     }
-
-    Right(chunks.toList)
   }
+
+//  def entries2(bits: BitVector): Either[Err, List[BlockEntry]] = {
+//
+//    // The following fails with OutOfMemoryError on large files
+//    @tailrec
+//    def decode(bits: BitVector, offset: Long = 0, entries: mutable.MutableList[BlockEntry] = mutable.MutableList.empty): Either[Err, List[BlockEntry]] = {
+//      if (bits.nonEmpty) {
+//        BlockHeader.codec.decode(bits).toEither.right.map(_.map(h => BlockEntry(offset, h))) match {
+//          case Left(err) => Left(err)
+//          case Right(DecodeResult(entry, remainder)) => decode(remainder, entry.end, entries += entry)
+//        }
+//      } else {
+//        Right(entries.toList)
+//      }
+//    }
+//
+//    decode(bits)
+//  }
 
 }
