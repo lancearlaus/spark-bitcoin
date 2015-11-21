@@ -6,11 +6,12 @@ import scodec.bits.{BitVector, ByteOrdering}
 import scodec.codecs._
 import scodec.{Codec, Err}
 
+import scala.annotation.tailrec
 import scala.collection.mutable
 
 case class Blockchain(magic: Long, version: Int) {
 
-  val blockCodec = Block.codec(version)
+  private val blockCodec = Block.codec(version)
 
   val codec: Codec[Block] = (
     constant(BitVector.fromLong(magic, 32, ByteOrdering.LittleEndian)) ~>
@@ -36,6 +37,25 @@ case class Blockchain(magic: Long, version: Int) {
   }
   object BlockChunk {
     def apply(offset: Long, header: BlockHeader): BlockChunk = BlockChunk(offset + BlockHeader.length, header.length)
+  }
+
+  def chunks2(bits: BitVector): Either[Err, List[BlockChunk]] = {
+
+    @tailrec
+    def decode(bits: BitVector, offset: Long = 0, chunks: mutable.MutableList[BlockChunk] = mutable.MutableList.empty): Either[Err, List[BlockChunk]] = {
+      if (bits.nonEmpty) {
+        (for {
+          header <- BlockHeader.codec.decode(bits)
+        } yield (BlockChunk(offset, header.value), header.remainder)) match {
+          case Successful((chunk, tail)) => decode(tail, chunk.end, chunks += chunk)
+          case Failure(err) => return Left(err)
+        }
+      } else {
+        Right(chunks.toList)
+      }
+    }
+
+    decode(bits)
   }
 
   def chunks(bits: BitVector): Either[Err, List[BlockChunk]] = {
