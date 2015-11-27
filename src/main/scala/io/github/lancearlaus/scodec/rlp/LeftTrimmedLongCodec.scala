@@ -12,11 +12,8 @@ object LeftTrimmedLongCodec extends Codec[Long] {
 
   override def sizeBound: SizeBound = SizeBound.bounded(8, javaLong.SIZE)
 
-  override def encode(value: Long): Attempt[BitVector] = {
-    val leadingZeroBytes = javaLong.numberOfLeadingZeros(value) / 8
-    val bits = Math.max(1, javaLong.BYTES - leadingZeroBytes) * 8
-    Attempt.successful(BitVector.fromLong(value, bits))
-  }
+  override def encode(value: Long): Attempt[BitVector] =
+    Attempt.successful(BitVector.fromLong(value, leftTrimmedBytesLength(value) * 8))
 
-  override def decode(bits: BitVector): Attempt[DecodeResult[Long]] = ulong(bits.size.toInt).decode(bits)
+  override def decode(bits: BitVector): Attempt[DecodeResult[Long]] = ulong(bits.length.toInt).decode(bits)
 }

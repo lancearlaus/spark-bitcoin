@@ -1,6 +1,7 @@
 package io.github.lancearlaus.scodec.rlp
 
 import java.nio.ByteBuffer
+import java.nio.charset.Charset
 
 import org.scalatest.{Matchers, WordSpec}
 import scodec.{DecodeResult, Attempt}
@@ -89,5 +90,11 @@ class RlpItemSpec extends WordSpec with Matchers {
     }
 
   }
+
+  case class CodecTest(n: Int, l: Long, s: String)
+
+  implicit val charSet = Charset.defaultCharset()
+
+  val testCodec = (rlpInt :: rlpLong :: rlpString).as[CodecTest]
 
 }
