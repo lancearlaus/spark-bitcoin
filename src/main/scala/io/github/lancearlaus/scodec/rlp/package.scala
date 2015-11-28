@@ -17,32 +17,30 @@ package object rlp {
   def leftTrimmedBytesLength(value: Long) = Math.max(javaLong.SIZE - javaLong.numberOfLeadingZeros(value), 8) / 8
 
   // Raw RLP codecs
-  val rlpItem = RlpItem.codec
-  val rlpItemString = RlpString.codec
-  val rlpItemList = RlpList.codec
+  def rlpItem = RlpItem.codec
+  def rlpItemString[A] = RlpString.codec[A]
+  def rlpItemList[A] = RlpList.codec[A]
 
 
-  private[rlp] def rlpCodec[A](codec: Codec[A]) = RlpCodec(codec)
-
-  val rlpByte: RlpCodec[Byte] = rlpCodec(RlpString.codec.narrow[Byte](
+  val rlpByte = RlpCodec(RlpString.codec[Byte].narrow[Byte](
     s => byte(s.bits.length.toInt).decode(s.bits).map(_.value),
     RlpString.apply
   ))
 
-  val rlpInt: RlpCodec[Int] = rlpCodec(RlpString.codec.narrow[Int](
+  val rlpInt = RlpCodec(RlpString.codec[Int].narrow[Int](
     s => LeftTrimmedIntCodec.decode(s.bits).map(_.value),
     RlpString.apply
   ))
 
-  val rlpLong: RlpCodec[Long] = rlpCodec(RlpString.codec.narrow[Long](
+  val rlpLong = RlpCodec(RlpString.codec[Long].narrow[Long](
     s => LeftTrimmedLongCodec.decode(s.bits).map(_.value),
     RlpString.apply
   ))
 
-  def rlpString(implicit charset: Charset): Codec[String] = RlpString.codec.narrow[String](
+  def rlpString(implicit charset: Charset): Codec[String] = RlpCodec(RlpString.codec[String].narrow[String](
     s => string.decode(s.bits).map(_.value),
     s => RlpString.apply(BitVector(s.getBytes(charset)))
-  )
+  ))
 
 //  def rlpList[A](codec: RlpCodec[A]): Codec[List[A]] = RlpList.codec.narrow[List[A]](
 //    l => list(codec),
@@ -52,4 +50,14 @@ package object rlp {
 //    l => list() l.items,
 //    l => RlpList.apply
 //  )
+
+/*
+
+val hlistCodec = (rlpInt :: rlpLong).asRlp[SomeClass]
+val listCodec = rlpList(rlpInt :: rlpLong).asRlp[SomeClass]
+val simpleListCodec = rlpList(rlpInt)
+
+ */
+
+
 }

@@ -1,9 +1,8 @@
 package io.github.lancearlaus.scodec.rlp
 
 import scodec._
-import scodec.bits.{BitVector, ByteVector}
+import scodec.bits.BitVector
 import scodec.codecs._
-import shapeless.HList
 
 
 sealed trait RlpCodec[A] extends Codec[A]
@@ -11,17 +10,20 @@ sealed trait RlpCodec[A] extends Codec[A]
 object RlpCodec {
 
   // Wraps a normal codec
-  private [rlp] def apply[A](codec: Codec[A]): RlpCodec[A] = new RlpCodec[A] {
-    override def sizeBound: SizeBound = codec.sizeBound
-    override def decode(bits: BitVector): Attempt[DecodeResult[A]] = codec.decode(bits)
-    override def encode(value: A): Attempt[BitVector] = codec.encode(value)
+  private [rlp] def apply[A](codec: Codec[A]): RlpCodec[A] = codec match {
+    case c: RlpCodec[A] => c
+    case c => new RlpCodec[A] {
+      override def sizeBound: SizeBound = codec.sizeBound
+      override def decode(bits: BitVector): Attempt[DecodeResult[A]] = codec.decode(bits)
+      override def encode(value: A): Attempt[BitVector] = codec.encode(value)
+    }
   }
 
 }
 
-sealed trait RlpItem[A]
-case class RlpString[A](bits: BitVector) extends RlpItem[A]
-case class RlpList[A](items: List[A]) extends RlpItem[List[A]]
+sealed trait RlpItem
+case class RlpString[A] private[rlp] (bits: BitVector) extends RlpItem
+case class RlpList[A] private[rlp] (items: List[RlpItem]) extends RlpItem
 
 
 // Header byte representation for RLP items
@@ -54,7 +56,7 @@ object RlpHeaderByte {
 
   val codec = uint8.xmap[RlpHeaderByte](RlpHeaderByte.apply, _.header)
 
-  def apply(value: RlpString): RlpHeaderByte = {
+  def apply(value: RlpString[_]): RlpHeaderByte = {
     val bytes = value.bits.bytes
     val length = bytes.length
     val first = if (length == 1) Some(bytes.get(0).toInt) else None
@@ -66,14 +68,14 @@ object RlpHeaderByte {
       }}
   }
 
-  def apply(list: RlpList): RlpHeaderByte = list.items.length match {
+  def apply(list: RlpList[_]): RlpHeaderByte = list.items.length match {
     case l if l <= 55 => RlpHeaderByte(0xc0 + l)
     case l => RlpHeaderByte(0xf7 + leftTrimmedBytesLength(l))
   }
 
   def apply(item: RlpItem): RlpHeaderByte = item match {
-    case s: RlpString => apply(s)
-    case l: RlpList => apply(l)
+    case s: RlpString[_] => apply(s)
+    case l: RlpList[_] => apply(l)
   }
 
 }
@@ -95,8 +97,8 @@ object RlpItem {
   def codec: Codec[RlpItem] = lazily {
 
     def encode(item: RlpItem): Attempt[BitVector] = item match {
-      case str: RlpString => RlpString.codec.encode(str)
-      case list: RlpList => RlpList.codec.encode(list)
+      case str: RlpString[_] => RlpString.codec.encode(str)
+      case list: RlpList[_] => RlpList.codec.encode(list)
     }
 
     def decode(buffer: BitVector): Attempt[DecodeResult[RlpItem]] = for {
@@ -136,19 +138,19 @@ object RlpString {
 
     def decode(buffer: BitVector): Attempt[DecodeResult[RlpString[A]]] = for {
       hb <- RlpHeaderByte.codec.decode(buffer)
-      decoded <- decodeFromHeader(hb)
+      decoded <- decodeFromHeader[A](hb)
     } yield decoded
 
-    Codec[RlpString](encode _, decode _)
+    Codec[RlpString[A]](encode _, decode _)
   }
 
   def decodeFromHeader[A](hb: DecodeResult[RlpHeaderByte]): Attempt[DecodeResult[RlpString[A]]] = for {
     decoded <- hb.value match {
       case ValueHeader(v) => Attempt.successful(DecodeResult(RlpString[A](BitVector.fromInt(v, 8)), hb.remainder))
-      case ShortStringHeader(len) => codecs.bits(len * 8).decode(hb.remainder).map(_.map(RlpString.apply))
+      case ShortStringHeader(len) => codecs.bits(len * 8).decode(hb.remainder).map(_.map(RlpString.apply[A]))
       case LongStringHeader(lenlen) => for {
         len <- ulong(lenlen * 8).decode(hb.remainder)
-        str <- codecs.bits(len.value.toInt * 8).decode(len.remainder).map(_.map(RlpString.apply))
+        str <- codecs.bits(len.value.toInt * 8).decode(len.remainder).map(_.map(RlpString.apply[A]))
       } yield str
     }
   } yield decoded
@@ -158,9 +160,9 @@ object RlpString {
 
 object RlpList {
 
-  def codec: Codec[RlpList] = {
+  def codec[A]: Codec[RlpList[A]] = {
 
-    def encode(list: RlpList): Attempt[BitVector] = {
+    def encode(list: RlpList[A]): Attempt[BitVector] = {
       val hb = RlpHeaderByte(list)
       for {
         header <- RlpHeaderByte.codec.encode(hb)
@@ -173,19 +175,19 @@ object RlpList {
       } yield encoded
     }
 
-    def decode(buffer: BitVector): Attempt[DecodeResult[RlpList]] = for {
+    def decode(buffer: BitVector): Attempt[DecodeResult[RlpList[A]]] = for {
       hb <- RlpHeaderByte.codec.decode(buffer)
       decoded <- hb.value match {
         case ShortListHeader(len) =>
           listOfN(shortLengthCodec(0xc0), RlpItem.codec).decode(buffer)
-            .map(_.map(RlpList.apply))
+            .map(_.map(RlpList.apply[A]))
         case LongListHeader(lenlen) =>
           listOfN(longLengthCodec(0xf7).xmap(_.toInt, _.toLong), RlpItem.codec).decode(buffer)
-            .map(_.map(RlpList.apply))
+            .map(_.map(RlpList.apply[A]))
       }
     } yield decoded
 
-    Codec[RlpList](encode _, decode _)
+    Codec[RlpList[A]](encode _, decode _)
   }
 
 }
